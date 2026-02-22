@@ -5,9 +5,9 @@ import { Root } from "./components/Root";
 import { getToken } from "./config";
 
 /**
- * Entry point: render immediately to show boot log
+ * Entry point: render immediately to show boot log.
+ * Pass --debug to enable file logging (logs/gateway.log, logs/gateway-messages.log, logs/discord.log).
  */
-
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,
 });
@@ -22,7 +22,7 @@ process.on("SIGINT", cleanup);
 process.on("SIGTERM", cleanup);
 
 const token = getToken();
-const serverWhitelist = process.argv[2] ?? undefined;
+const serverWhitelist = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? undefined;
 createRoot(renderer).render(
   <Root token={token} serverWhitelist={serverWhitelist} />
 );

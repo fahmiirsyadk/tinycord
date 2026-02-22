@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { isDebug } from "./debug-flag";
 import { DiscordGateway } from "./gateway";
 import { notifyMessage } from "./notify";
 
@@ -27,6 +28,13 @@ export interface DiscordEmbed {
   };
 }
 
+export interface DiscordAttachment {
+  id: string;
+  url: string;
+  filename: string;
+  content_type?: string;
+}
+
 export interface DiscordMessage {
   id: string;
   content: string;
@@ -43,6 +51,7 @@ export interface DiscordMessage {
     content: string;
   };
   embeds?: DiscordEmbed[];
+  attachments?: DiscordAttachment[];
 }
 
 export interface DiscordChannel {
@@ -76,6 +85,26 @@ const SUPER_PROPS = Buffer.from(JSON.stringify({
 })).toString("base64");
 
 class DiscordState extends EventEmitter {
+  private logFile: string | null = null;
+  private initLogFile() {
+    if (!isDebug) return;
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const logDir = path.join(process.cwd(), "logs");
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      this.logFile = path.join(logDir, "discord.log");
+    } catch {}
+  }
+  private writeLog(msg: string) {
+    if (this.logFile) {
+      try {
+        const fs = require("fs");
+        fs.appendFileSync(this.logFile, `${new Date().toISOString()} ${msg}\n`);
+      } catch {}
+    }
+  }
+
   private gateway: DiscordGateway | null = null;
   private token: string = "";
   private activeChannelId: string | null = null;
@@ -83,7 +112,7 @@ class DiscordState extends EventEmitter {
   private unreadCounts: Map<string, number> = new Map();
   private mentionCounts: Map<string, number> = new Map();
   private readStates: Map<string, string> = new Map();
-  private messagesCache: Map<string, DiscordMessage[]> = new Map();
+
   private lastRequestTime: Map<string, number> = new Map();
   private rateLimitDelay = 500;
 
@@ -97,24 +126,29 @@ class DiscordState extends EventEmitter {
     if (!this.gateway) return;
 
     this.gateway.on("connected", () => {
+      this.writeLog("Gateway: connected, waiting for HELLO");
       this.emit("log", "Gateway: connected, waiting for HELLO");
     });
 
     this.gateway.on("hello", () => {
+      this.writeLog("Gateway: HELLO received, sending IDENTIFY");
       this.emit("log", "Gateway: HELLO received, sending IDENTIFY");
     });
 
     this.gateway.on("identifying", () => {
+      this.writeLog("Gateway: identifying...");
       this.emit("log", "Gateway: identifying...");
     });
 
     this.gateway.on("gatewayLog", (msg: string) => {
+      this.writeLog(msg);
       this.emit("log", msg);
     });
 
     this.gateway.on("ready", (data: any) => {
       this.userInfo = data.user;
 
+      this.writeLog(`[READY] Keys in payload: ${Object.keys(data).join(", ")}`);
       this.emit("log", `[READY] Keys in payload: ${Object.keys(data).join(", ")}`);
 
       if (data.guilds) {
@@ -154,13 +188,9 @@ class DiscordState extends EventEmitter {
     });
 
     this.gateway.on("messageCreate", (data: any) => {
+      const logLine = `[GATEWAY] id=${data.id} content="${(data.content || "").slice(0, 30)}" embeds=${!!data.embeds} attachments=${!!data.attachments}`;
+      this.emit("log", logLine);
       const message = this.formatMessageFromGateway(data);
-
-      const cache = this.messagesCache.get(data.channel_id);
-      if (cache) {
-        if (cache.length > 500) cache.shift();
-        cache.push(message);
-      }
 
       if (data.channel_id === this.activeChannelId) {
         this.emit("message", message);
@@ -169,11 +199,11 @@ class DiscordState extends EventEmitter {
         this.unreadCounts.set(data.channel_id, unread + 1);
 
         const isDm = !data.guild_id;
-        
+
         if (isDm) {
           const dmChannel = this.channelsCache.get(data.channel_id);
           const channelName = dmChannel?.name || dmChannel?.recipients?.[0]?.username || "DM";
-          
+
           notifyMessage(message, { name: channelName }, undefined, true, data.mentions);
         } else {
           const isMentioned = data.mentions?.some((mention: any) =>
@@ -230,9 +260,12 @@ class DiscordState extends EventEmitter {
   }
 
   private formatMessageFromGateway(data: any): DiscordMessage {
+    if (data.content === undefined || data.content === null) {
+      console.log(`[DEBUG] Message ${data.id} has no content:`, JSON.stringify(data).slice(0, 500));
+    }
     const msg: DiscordMessage = {
       id: data.id,
-      content: data.content,
+      content: data.content || "",
       author: {
         id: data.author.id,
         username: data.author.username,
@@ -254,6 +287,15 @@ class DiscordState extends EventEmitter {
       msg.embeds = data.embeds;
     }
 
+    if (data.attachments && data.attachments.length > 0) {
+      msg.attachments = data.attachments.map((a: any) => ({
+        id: a.id,
+        url: a.url,
+        filename: a.filename || "",
+        content_type: a.content_type,
+      }));
+    }
+
     return msg;
   }
 
@@ -261,19 +303,19 @@ class DiscordState extends EventEmitter {
     const now = Date.now();
     const lastTime = this.lastRequestTime.get(endpoint) || 0;
     const timeSinceLastRequest = now - lastTime;
-    
+
     if (timeSinceLastRequest < this.rateLimitDelay) {
       const waitTime = this.rateLimitDelay - timeSinceLastRequest;
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
-    
+
     this.lastRequestTime.set(endpoint, Date.now());
   }
 
   private async apiRequest(endpoint: string, options: RequestInit = {}): Promise<any> {
     const cleanEndpoint = endpoint.split("?")[0] || endpoint;
     await this.enforceRateLimit(cleanEndpoint);
-    
+
     const headers = {
       Authorization: this.token,
       "User-Agent": USER_AGENT,
@@ -298,8 +340,10 @@ class DiscordState extends EventEmitter {
   }
 
   async connect(token: string): Promise<void> {
+    this.initLogFile();
     const startTime = Date.now();
     this.token = token;
+    this.writeLog("Gateway: connecting to wss://gateway.discord.gg");
     this.emit("log", "Gateway: connecting to wss://gateway.discord.gg");
     this.gateway = new DiscordGateway(token);
     this.setupGatewayHandlers();
@@ -360,7 +404,7 @@ class DiscordState extends EventEmitter {
       }
 
       this.emit("log", `Guilds: all ${totalGuilds} servers loaded`);
-      
+
       const totalTime = Date.now() - this.connectStartTime;
       this.emit("log", `Status: connected (${totalTime}ms)`);
     } catch (error) {
@@ -428,12 +472,9 @@ class DiscordState extends EventEmitter {
   async getMessages(channelId: string, limit = 50): Promise<DiscordMessage[]> {
     try {
       const msgs = await this.apiRequestWithRetry(`/channels/${channelId}/messages?limit=${limit}`);
-      const formatted = msgs
+      return msgs
         .reverse()
         .map((msg: any) => this.formatMessageFromGateway(msg));
-
-      this.messagesCache.set(channelId, formatted);
-      return formatted;
     } catch (error) {
       console.error("Failed to fetch messages:", error);
       return [];
@@ -447,9 +488,6 @@ class DiscordState extends EventEmitter {
         .reverse()
         .map((msg: any) => this.formatMessageFromGateway(msg));
 
-      const currentCache = this.messagesCache.get(channelId) || [];
-      const newCache = [...formatted, ...currentCache];
-      this.messagesCache.set(channelId, newCache);
       this.emit("messagesLoaded", channelId);
       return formatted;
     } catch (error) {
@@ -608,7 +646,7 @@ class DiscordState extends EventEmitter {
   async getMemberDisplayName(guildId: string, userId: string): Promise<string> {
     const cached = this.guildMembersCache.get(guildId);
     const member = cached?.find(m => m.id === userId);
-    
+
     if (member) {
       return member.displayName;
     }
@@ -620,7 +658,7 @@ class DiscordState extends EventEmitter {
 
   async getMembersForMessages(guildId: string, userIds: string[]): Promise<DiscordMember[]> {
     const cached = this.guildMembersCache.get(guildId) || [];
-    
+
     if (userIds.length === 0) {
       return cached;
     }

@@ -99,7 +99,7 @@ export function MainScreen({ serverWhitelist }: MainScreenProps = {}) {
       const currentId = discordState.getCurrentUserId();
       const isCurrentUser = msg.author.id === currentId;
       const now = Date.now();
-      
+
       setMessages((prev) => {
         let filtered = prev;
         if (isCurrentUser) {
@@ -180,7 +180,7 @@ export function MainScreen({ serverWhitelist }: MainScreenProps = {}) {
     return omniboxItems.filter((item) => {
       if (item.type === "channel") {
         return item.guild.name.toLowerCase().includes(q) ||
-               item.channel.name.toLowerCase().includes(q);
+          item.channel.name.toLowerCase().includes(q);
       } else {
         return item.name.toLowerCase().includes(q);
       }
@@ -479,6 +479,7 @@ export function MainScreen({ serverWhitelist }: MainScreenProps = {}) {
         timestamp: new Date(),
         channelId,
         referencedMessage: resolvingMessage ? {
+          authorId: resolvingMessage.author.id,
           author: resolvingMessage.author.displayName,
           content: resolvingMessage.content,
         } : undefined,

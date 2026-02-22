@@ -1,9 +1,5 @@
 import { EventEmitter } from "events";
-
-/**
- * Raw Discord Gateway WebSocket client
- * Mirrors Discordo's gateway implementation with browser fingerprint spoofing
- */
+import { isDebug } from "./debug-flag";
 
 const OS = "Windows";
 const BROWSER = "Chrome";
@@ -38,11 +34,55 @@ export class DiscordGateway extends EventEmitter {
   constructor(token: string) {
     super();
     this.token = token;
+    this.initLogFile();
+  }
+
+  private logFile: string | null = null;
+  private messageLogFile: string | null = null;
+  private initLogFile() {
+    if (!isDebug) return;
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const logDir = path.join(process.cwd(), "logs");
+      if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+      this.logFile = path.join(logDir, "gateway.log");
+      this.messageLogFile = path.join(logDir, "gateway-messages.log");
+    } catch {}
+  }
+
+  private logMessagePayload(eventType: string, data: any) {
+    if (!this.messageLogFile) return;
+    try {
+      const fs = require("fs");
+      const ts = new Date().toISOString();
+      const contentLen = data.content == null ? "null" : String((data.content as string).length);
+      const contentPreview =
+        typeof data.content === "string"
+          ? (data.content.slice(0, 80) || "(empty string)").replace(/\n/g, "\\n")
+          : String(data.content);
+      const keys = Object.keys(data).join(",");
+      const authorId = data.author?.id ?? "?";
+      const authorName =
+        data.author?.global_name ?? data.author?.username ?? "?";
+      const summary = `[${ts}] ${eventType} id=${data.id} channel_id=${data.channel_id} content_len=${contentLen} author=${authorId}/${authorName} keys=[${keys}]\n  content_preview=${contentPreview}`;
+      fs.appendFileSync(this.messageLogFile, summary + "\n");
+      const payloadJson = JSON.stringify(data);
+      const truncated =
+        payloadJson.length > 4096 ? payloadJson.slice(0, 4096) + ' "...truncated"' : payloadJson;
+      fs.appendFileSync(this.messageLogFile, "  payload: " + truncated + "\n");
+    } catch (_) {}
   }
 
   private log(msg: string) {
     const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
-    this.emit("gatewayLog", `[${timestamp}] Gateway: ${msg}`);
+    const fullMsg = `[${timestamp}] Gateway: ${msg}`;
+    this.emit("gatewayLog", fullMsg);
+    if (this.logFile) {
+      try {
+        require("fs").appendFileSync(this.logFile, fullMsg + "\n");
+      } catch {}
+    }
   }
 
   async connect(): Promise<void> {
@@ -108,7 +148,6 @@ export class DiscordGateway extends EventEmitter {
         break;
 
       case OP_HEARTBEAT_ACK:
-        // Heartbeat acknowledged - quiet
         break;
 
       case OP_RECONNECT:
@@ -131,10 +170,14 @@ export class DiscordGateway extends EventEmitter {
 
   private identify() {
     this.emit("identifying");
-    // Gateway intents - GUILDS for server data, GUILD_MEMBERS for member chunks
-    const GUILDS = 1 << 0;        // 1
-    const GUILD_MEMBERS = 1 << 9; // 512
-    const intents = GUILDS | GUILD_MEMBERS;
+    // Gateway intents (Discord API). Without MESSAGE_CONTENT, gateway sends
+    // MESSAGE_CREATE with empty content for other users' messages.
+    const GUILDS = 1 << 0;           // 1
+    const GUILD_MEMBERS = 1 << 1;    // 2 - member chunks
+    const GUILD_MESSAGES = 1 << 9;   // 512 - MESSAGE_CREATE in guilds
+    const DIRECT_MESSAGES = 1 << 12; // 4096 - MESSAGE_CREATE in DMs
+    const MESSAGE_CONTENT = 1 << 15; // 32768 - privileged: actual content in events
+    const intents = GUILDS | GUILD_MEMBERS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT;
     
     const identifyPayload = {
       op: OP_IDENTIFY,
@@ -196,10 +239,12 @@ export class DiscordGateway extends EventEmitter {
         break;
 
       case "MESSAGE_CREATE":
+        this.logMessagePayload("MESSAGE_CREATE", data);
         this.emit("messageCreate", data);
         break;
 
       case "MESSAGE_UPDATE":
+        this.logMessagePayload("MESSAGE_UPDATE", data);
         this.emit("messageUpdate", data);
         break;
 
