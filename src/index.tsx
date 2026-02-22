@@ -1,16 +1,28 @@
-import { createCliRenderer, TextAttributes } from "@opentui/core";
+import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
+import { discordState } from "./discord";
+import { Root } from "./components/Root";
+import { getToken } from "./config";
 
-function App() {
-  return (
-    <box alignItems="center" justifyContent="center" flexGrow={1}>
-      <box justifyContent="center" alignItems="flex-end">
-        <ascii-font font="tiny" text="OpenTUI" />
-        <text attributes={TextAttributes.DIM}>What will you build?</text>
-      </box>
-    </box>
-  );
-}
+/**
+ * Entry point: render immediately to show boot log
+ */
 
-const renderer = await createCliRenderer();
-createRoot(renderer).render(<App />);
+const renderer = await createCliRenderer({
+  exitOnCtrlC: false,
+});
+
+const cleanup = async () => {
+  await discordState.disconnect();
+  renderer.destroy();
+  process.exit(0);
+};
+
+process.on("SIGINT", cleanup);
+process.on("SIGTERM", cleanup);
+
+const token = getToken();
+const serverWhitelist = process.argv[2] ?? undefined;
+createRoot(renderer).render(
+  <Root token={token} serverWhitelist={serverWhitelist} />
+);
