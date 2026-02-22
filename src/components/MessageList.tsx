@@ -15,6 +15,24 @@ interface MessageListProps {
 
 type ContentSegment = { type: "text"; value: string } | { type: "mention"; id: string; displayName: string };
 
+function renderContentSegments(
+  segments: ContentSegment[],
+  currentUserId: string | null
+) {
+  return segments.map((seg, i) =>
+    seg.type === "text" ? (
+      <text key={i}>{seg.value}</text>
+    ) : (
+      <text
+        key={i}
+        fg={seg.id === "me" || seg.id === currentUserId ? MENTION_ME_FG : MENTION_OTHER_FG}
+      >
+        @{seg.displayName}
+      </text>
+    )
+  );
+}
+
 function parseContentWithMentions(
   content: string,
   memberById: Map<string, { displayName: string }>
@@ -212,22 +230,13 @@ export function MessageList({
               <text fg={isSelected ? (focused ? "white" : "gray") : "gray"}>{isSelected ? "> " : "  "}</text>
               {!hideTimestamps && <text>{formatTime(msg.timestamp)} </text>}
               <text fg={authorFg}>{authorName}:</text>
-              <text> </text>
-              {contentSegments.map((seg, i) =>
-                seg.type === "text" ? (
-                  <text key={i}>{seg.value}</text>
-                ) : (
-                  <text
-                    key={i}
-                    fg={seg.id === "me" || seg.id === currentUserId ? MENTION_ME_FG : MENTION_OTHER_FG}
-                  >
-                    @{seg.displayName}
-                  </text>
-                )
-              )}
-              {msg.attachments?.map((a) => (
-                <text key={a.id} fg="gray">{` [${a.filename || "file"} attachment]`}</text>
-              ))}
+              {msg.content ? <text> </text> : null}
+              {msg.content
+                ? renderContentSegments(contentSegments, currentUserId)
+                : null}
+              {msg.attachments?.length
+                ? <text fg="gray"> [{msg.attachments.map(a => `${a.filename || "file"} attachment`).join(", ")}]</text>
+                : null}
             </box>
             {msg.embeds && msg.embeds.length > 0 && (
               <box flexDirection="column" paddingLeft={isSelected ? 2 : 4} marginTop={1}>
