@@ -1,13 +1,4 @@
 import type { DiscordMessage, DiscordEmbed } from "../discord";
-
-function hasImageAttachments(msg: DiscordMessage): boolean {
-  if (!msg.attachments?.length) return false;
-  return msg.attachments.some(
-    (a) =>
-      (a.content_type && a.content_type.startsWith("image/")) ||
-      /\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i.test(a.filename || "")
-  );
-}
 import { useEffect, useRef, useMemo, useState, useCallback } from "react";
 import { useKeyboard } from "@opentui/react";
 
@@ -234,9 +225,9 @@ export function MessageList({
                   </text>
                 )
               )}
-              {hasImageAttachments(msg) && (
-                <text fg="gray"> [image attachment]</text>
-              )}
+              {msg.attachments?.map((a) => (
+                <text key={a.id} fg="gray">{` [${a.filename || "file"} attachment]`}</text>
+              ))}
             </box>
             {msg.embeds && msg.embeds.length > 0 && (
               <box flexDirection="column" paddingLeft={isSelected ? 2 : 4} marginTop={1}>
